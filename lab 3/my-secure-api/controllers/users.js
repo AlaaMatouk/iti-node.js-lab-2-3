@@ -1,13 +1,16 @@
 const User = require("../models/User");
-const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const util = require("util");
+const signJwt = util.promisify(jwt.sign);
 
-exports.signup = async (req, res) => {
+exports.signup = async (req, res, next) => {
   try {
-    const { email, password, passwordConfirm } = req.body;
+    const { name, email, password, passwordConfirm } = req.body;
 
-    if (!email || !password || !passwordConfirm) {
-      return res.status(400).json({ message: "All fields are required" });
+    if (!name || !email || !password || !passwordConfirm) {
+      return res
+        .status(400)
+        .json({ message: "Please provide all required fields" });
     }
 
     if (password !== passwordConfirm) {
@@ -19,48 +22,65 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ message: "Email already in use" });
     }
 
-    const saltRounds = parseInt(process.env.SALT_ROUNDS);
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const user = await User.create({ name, email, password });
 
-    const newUser = new User({
-      email,
-      password: hashedPassword,
-    });
-
-    await newUser.save();
-
-    res.status(201).json({ message: "User created successfully" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-exports.login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password required" });
-    }
-
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
+    const token = await signJwt(
+      { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
 
-    res.json({ token });
+    res.status(201).json({
+      status: "success",
+      token,
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      },
+    });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    next(err);
+  }
+};
+
+exports.login = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Please provide email and password" });
+    }
+
+    const user = await User.findOne({ email }).select("+password");
+    if (!user || !(await user.correctPassword(password, user.password))) {
+      return res.status(401).json({ message: "Incorrect email or password" });
+    }
+
+    const token = await signJwt(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    res.status(200).json({
+      status: "success",
+      token,
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
   }
 };
